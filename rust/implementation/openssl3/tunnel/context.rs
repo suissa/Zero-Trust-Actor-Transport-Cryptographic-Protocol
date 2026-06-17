@@ -83,6 +83,21 @@ impl From<TlsVersion> for i64 {
     }
 }
 
+/// Normalizes aliases for key-establishment group names.
+fn normalize_ke_name(name: &str) -> &str {
+    match name {
+        // NIST standardized ML-KEM names mapped to OpenSSL/OQS Kyber groups.
+        "MLKEM512" | "ML-KEM-512" | "mlkem512" | "ml-kem-512" => "kyber512",
+        "MLKEM768" | "ML-KEM-768" | "mlkem768" | "ml-kem-768" => "kyber768",
+        "MLKEM1024" | "ML-KEM-1024" | "mlkem1024" | "ml-kem-1024" => "kyber1024",
+        // Common hybrid naming aliases.
+        "X25519MLKEM768" | "X25519-MLKEM-768" | "x25519mlkem768" | "x25519-mlkem-768" => {
+            "x25519_kyber768"
+        }
+        _ => name,
+    }
+}
+
 /// Convenient wrapper around a `SSL_CTX`.
 struct SslContext(NonNull<NativeSslCtx>);
 
@@ -359,7 +374,10 @@ impl SslContext {
             return Err((pb::KEMError::KEMERROR_INVALID, "no KE specified").into());
         }
 
-        let list = CString::new(kes.iter().map(|s| s.as_ref()).collect::<Vec<_>>().join(":"))
+        let list = CString::new(kes.iter()
+                .map(|s| normalize_ke_name(s.as_ref()))
+                .collect::<Vec<_>>()
+                .join(":"))
             .map_err(|e| {
                 (
                     pb::SystemError::SYSTEMERROR_MEMORY,
@@ -873,6 +891,20 @@ mod test {
         let result = ssl_ctx_wrapped.set_kes(&["X25519", "kyber768"]);
 
         result.expect("`SslContext::set_kes` failed");
+    }
+
+
+    /// Tests [`SslContext::set_kes`] with ML-KEM aliases.
+    #[test]
+    #[allow(non_snake_case)]
+    fn test_ssl_context_set_KEs_mlkem_aliases() {
+        let ctx = crate::Context::default();
+        let ssl_ctx = new_ssl_context(&ctx, Mode::Client).unwrap();
+        let ssl_ctx_wrapped = SslContext(ssl_ctx.as_nonnull());
+
+        let result = ssl_ctx_wrapped.set_kes(&["X25519-MLKEM-768", "ML-KEM-768"]);
+
+        result.expect("`SslContext::set_kes` with ML-KEM aliases failed");
     }
 
     /// Tests [`SslContext::set_kes`] with invalid KE.
